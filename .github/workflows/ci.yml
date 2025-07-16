@@ -1,0 +1,305 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  release:
+    types: [ published ]
+
+env:
+  BUILD_TYPE: Release
+
+jobs:
+  # Static analysis and code quality
+  static-analysis:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y clang-tidy cppcheck
+    
+    - name: Run clang-tidy
+      run: |
+        find toyar/src toyar/include -name "*.cpp" -o -name "*.h" | xargs clang-tidy -checks='-*,readability-*,performance-*,modernize-*,bugprone-*'
+    
+    - name: Run cppcheck
+      run: |
+        cppcheck --enable=all --error-exitcode=1 --suppress=missingIncludeSystem toyar/
+
+  # Build and test on multiple platforms
+  build-test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, ubuntu-20.04, macos-latest]
+        build_type: [Debug, Release]
+        compiler: [gcc, clang]
+        exclude:
+          # macOS doesn't have gcc in github actions
+          - os: macos-latest
+            compiler: gcc
+    
+    runs-on: ${{ matrix.os }}
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Cache dependencies
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cache/vcpkg
+          ~/.conan
+        key: ${{ runner.os }}-deps-${{ hashFiles('**/CMakeLists.txt') }}
+    
+    - name: Install dependencies (Ubuntu)
+      if: startsWith(matrix.os, 'ubuntu')
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          libopencv-dev \
+          libglew-dev \
+          libglfw3-dev \
+          libglm-dev \
+          freeglut3-dev \
+          ninja-build \
+          lcov
+    
+    - name: Install dependencies (macOS)
+      if: matrix.os == 'macos-latest'
+      run: |
+        brew update
+        brew install opencv glew glfw glm freeglut ninja
+    
+    - name: Set up compiler
+      if: matrix.compiler == 'clang'
+      run: |
+        echo "CC=clang" >> $GITHUB_ENV
+        echo "CXX=clang++" >> $GITHUB_ENV
+    
+    - name: Configure CMake
+      run: |
+        cmake -B build \
+          -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+          -DTOYAR_BUILD_TESTS=ON \
+          -DTOYAR_BUILD_EXAMPLES=ON \
+          -DTOYAR_ENABLE_COVERAGE=${{ matrix.build_type == 'Debug' && matrix.compiler == 'gcc' && startsWith(matrix.os, 'ubuntu') }} \
+          -GNinja
+    
+    - name: Build
+      run: cmake --build build --config ${{ matrix.build_type }} --parallel
+    
+    - name: Run tests
+      working-directory: build
+      run: ctest --output-on-failure --parallel 2
+    
+    - name: Generate coverage report
+      if: matrix.build_type == 'Debug' && matrix.compiler == 'gcc' && startsWith(matrix.os, 'ubuntu')
+      working-directory: build
+      run: |
+        lcov --capture --directory . --output-file coverage.info
+        lcov --remove coverage.info '/usr/*' '*/tests/*' '*/build/*' --output-file coverage_filtered.info
+        genhtml coverage_filtered.info --output-directory coverage_html
+    
+    - name: Upload coverage to Codecov
+      if: matrix.build_type == 'Debug' && matrix.compiler == 'gcc' && startsWith(matrix.os, 'ubuntu')
+      uses: codecov/codecov-action@v3
+      with:
+        file: build/coverage_filtered.info
+        fail_ci_if_error: true
+
+  # Sanitizer builds
+  sanitizers:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        sanitizer: [address, thread, undefined]
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          libopencv-dev \
+          libglew-dev \
+          libglfw3-dev \
+          libglm-dev \
+          freeglut3-dev \
+          ninja-build
+    
+    - name: Configure CMake with ${{ matrix.sanitizer }} sanitizer
+      run: |
+        cmake -B build \
+          -DCMAKE_BUILD_TYPE=Debug \
+          -DTOYAR_BUILD_TESTS=ON \
+          -DTOYAR_ENABLE_ASAN=${{ matrix.sanitizer == 'address' }} \
+          -DTOYAR_ENABLE_TSAN=${{ matrix.sanitizer == 'thread' }} \
+          -DCMAKE_CXX_FLAGS="${{ matrix.sanitizer == 'undefined' && '-fsanitize=undefined' || '' }}" \
+          -GNinja
+    
+    - name: Build
+      run: cmake --build build --config Debug --parallel
+    
+    - name: Run tests with sanitizer
+      working-directory: build
+      run: ctest --output-on-failure --parallel 1
+      env:
+        ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+        TSAN_OPTIONS: halt_on_error=1
+        UBSAN_OPTIONS: halt_on_error=1
+
+  # WebAssembly build
+  wasm-build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Setup Emscripten
+      uses: mymindstorm/setup-emsdk@v11
+      with:
+        version: latest
+    
+    - name: Configure for WebAssembly
+      run: |
+        emcmake cmake -B build-wasm \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DTOYAR_BUILD_TESTS=OFF \
+          -DTOYAR_BUILD_EXAMPLES=ON
+    
+    - name: Build WebAssembly
+      run: cmake --build build-wasm --parallel
+    
+    - name: Upload WASM artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: toyar-wasm
+        path: |
+          build-wasm/*.wasm
+          build-wasm/*.js
+
+  # Performance benchmarks
+  benchmarks:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          libopencv-dev \
+          libglew-dev \
+          libglfw3-dev \
+          libglm-dev \
+          freeglut3-dev \
+          ninja-build \
+          google-perftools \
+          libgoogle-perftools-dev
+    
+    - name: Configure CMake for benchmarks
+      run: |
+        cmake -B build \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DTOYAR_BUILD_TESTS=ON \
+          -DTOYAR_BUILD_BENCHMARKS=ON \
+          -DCMAKE_CXX_FLAGS="-O3 -march=native" \
+          -GNinja
+    
+    - name: Build
+      run: cmake --build build --parallel
+    
+    - name: Run benchmarks
+      working-directory: build
+      run: |
+        ./bench_math || true
+        ./bench_tracking || true
+    
+    - name: Store benchmark results
+      uses: benchmark-action/github-action-benchmark@v1
+      with:
+        name: C++ Benchmark
+        tool: 'googlecpp'
+        output-file-path: build/benchmark_results.json
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        auto-push: true
+
+  # Documentation generation
+  documentation:
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install Doxygen
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y doxygen graphviz
+    
+    - name: Generate documentation
+      run: |
+        doxygen docs/Doxyfile
+    
+    - name: Deploy to GitHub Pages
+      uses: peaceiris/actions-gh-pages@v3
+      if: github.ref == 'refs/heads/main'
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        publish_dir: docs/html
+
+  # Release builds
+  release:
+    runs-on: ubuntu-latest
+    needs: [build-test, static-analysis, sanitizers]
+    if: github.event_name == 'release'
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          libopencv-dev \
+          libglew-dev \
+          libglfw3-dev \
+          libglm-dev \
+          freeglut3-dev \
+          ninja-build
+    
+    - name: Configure CMake
+      run: |
+        cmake -B build \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DTOYAR_BUILD_TESTS=OFF \
+          -DTOYAR_BUILD_EXAMPLES=ON \
+          -DCMAKE_INSTALL_PREFIX=/usr/local \
+          -GNinja
+    
+    - name: Build
+      run: cmake --build build --parallel
+    
+    - name: Package
+      working-directory: build
+      run: |
+        cpack -G DEB
+        cpack -G TGZ
+    
+    - name: Upload release assets
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ github.event.release.upload_url }}
+        asset_path: build/ToyAR-*.deb
+        asset_name: ToyAR-${{ github.event.release.tag_name }}-Linux.deb
+        asset_content_type: application/vnd.debian.binary-package

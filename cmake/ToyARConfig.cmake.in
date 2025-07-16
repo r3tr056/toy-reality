@@ -1,0 +1,16 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+# Find required dependencies
+find_dependency(OpenCV 4.0 REQUIRED COMPONENTS core imgproc imgcodecs videoio calib3d aruco)
+find_dependency(OpenGL REQUIRED)
+find_dependency(GLEW REQUIRED)
+find_dependency(glfw3 3.3 REQUIRED)
+find_dependency(glm REQUIRED)
+find_dependency(Threads REQUIRED)
+
+# Import targets
+include("${CMAKE_CURRENT_LIST_DIR}/ToyARTargets.cmake")
+
+check_required_components(ToyAR)

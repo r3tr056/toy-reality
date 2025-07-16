@@ -35,7 +35,7 @@ struct Pose6DOF {
 };
 
 // Motion tracking state
-enum class TrackingState {
+enum class MotionTrackingState {
     NOT_TRACKING,
     INITIALIZING,
     TRACKING,
@@ -55,7 +55,7 @@ public:
     
     // Get current pose
     Pose6DOF getCurrentPose() const { return currentPose; }
-    TrackingState getTrackingState() const { return trackingState; }
+    MotionTrackingState getTrackingState() const { return trackingState; }
     
     // Get tracked features for visualization
     std::vector<TrackedFeature> getTrackedFeatures() const { return trackedFeatures; }
@@ -104,7 +104,7 @@ private:
     cv::TermCriteria flowCriteria;
     
     // Current state
-    TrackingState trackingState;
+    MotionTrackingState trackingState;
     Pose6DOF currentPose;
     std::vector<TrackedFeature> trackedFeatures;
     

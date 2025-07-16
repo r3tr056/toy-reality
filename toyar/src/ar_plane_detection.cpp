@@ -125,7 +125,7 @@ std::vector<DetectedPlane> ARPlaneDetector::findPlanesRANSAC(const std::vector<V
             
             // Compute plane normal and validate
             Vec3 normal = PlaneDetectionUtils::computePlaneNormal(p1, p2, p3);
-            if (normal.norm() < 0.1f) continue; // Degenerate case
+            if (normal.length() < 0.1f) continue; // Degenerate case
             
             normal = normal.normalized();
             
@@ -193,7 +193,7 @@ DetectedPlane ARPlaneDetector::fitPlane(const std::vector<Vec3>& inlierPoints) {
     // Compute size as maximum distance from center
     float maxDist = 0.0f;
     for (const auto& point : inlierPoints) {
-        float dist = (point - centroid).norm();
+        float dist = (point - centroid).length();
         if (dist > maxDist) {
             maxDist = dist;
         }
@@ -205,7 +205,7 @@ DetectedPlane ARPlaneDetector::fitPlane(const std::vector<Vec3>& inlierPoints) {
 
 bool ARPlaneDetector::mergePlanes(DetectedPlane& plane1, const DetectedPlane& plane2) {
     // Check if planes are close enough to merge
-    float centerDistance = (plane1.center - plane2.center).norm();
+    float centerDistance = (plane1.center - plane2.center).length();
     float normalSimilarity = plane1.normal.dot(plane2.normal);
     
     if (centerDistance < MERGE_DISTANCE_THRESHOLD && normalSimilarity > MERGE_NORMAL_THRESHOLD) {
@@ -297,7 +297,7 @@ std::vector<Vec3> filterPointsByDistance(const std::vector<Vec3>& points, float 
     std::vector<Vec3> filtered;
     
     for (const auto& point : points) {
-        float distance = point.norm(); // Distance from origin
+        float distance = point.length(); // Distance from origin
         if (distance <= maxDistance) {
             filtered.push_back(point);
         }

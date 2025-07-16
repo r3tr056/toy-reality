@@ -8,7 +8,7 @@ const float ARMotionTracker::MIN_PARALLAX = 1.0f;
 const float ARMotionTracker::MAX_REPROJECTION_ERROR = 2.0f;
 
 ARMotionTracker::ARMotionTracker() 
-    : trackingState(TrackingState::NOT_TRACKING)
+    : trackingState(MotionTrackingState::NOT_TRACKING)
     , maxFeatures(500)
     , minFeatures(50)
     , nextFeatureId(0)
@@ -62,41 +62,41 @@ bool ARMotionTracker::processFrame(const cv::Mat& frame, double timestamp) {
     bool success = false;
     
     switch (trackingState) {
-        case TrackingState::NOT_TRACKING:
+        case MotionTrackingState::NOT_TRACKING:
             success = initializeTracking(grayFrame);
             if (success) {
-                trackingState = TrackingState::INITIALIZING;
+                trackingState = MotionTrackingState::INITIALIZING;
             }
             break;
             
-        case TrackingState::INITIALIZING:
+        case MotionTrackingState::INITIALIZING:
             success = trackFeatures(previousFrame, grayFrame);
             if (success && initializationFrameCount >= 10) {
                 success = estimatePose(grayFrame);
                 if (success) {
-                    trackingState = TrackingState::TRACKING;
+                    trackingState = MotionTrackingState::TRACKING;
                     std::cout << "Motion tracking initialized successfully!" << std::endl;
                 }
             }
             initializationFrameCount++;
             break;
             
-        case TrackingState::TRACKING:
+        case MotionTrackingState::TRACKING:
             success = trackFeatures(previousFrame, grayFrame);
             if (success) {
                 success = estimatePose(grayFrame);
                 if (!success || static_cast<int>(trackedFeatures.size()) < minFeatures) {
-                    trackingState = TrackingState::LOST;
+                    trackingState = MotionTrackingState::LOST;
                     std::cout << "Tracking lost - insufficient features" << std::endl;
                 }
             }
             break;
             
-        case TrackingState::LOST:
+        case MotionTrackingState::LOST:
             // Try to relocalize
             success = initializeTracking(grayFrame);
             if (success) {
-                trackingState = TrackingState::INITIALIZING;
+                trackingState = MotionTrackingState::INITIALIZING;
                 initializationFrameCount = 0;
                 std::cout << "Attempting to relocalize..." << std::endl;
             }
@@ -237,7 +237,7 @@ bool ARMotionTracker::estimatePose(const cv::Mat& /*frame*/) {
     
     if (worldPoints.size() < 6) {
         // Not enough points for pose estimation, try to triangulate new points
-        if (trackingState == TrackingState::INITIALIZING && poseHistory.size() >= 2) {
+        if (trackingState == MotionTrackingState::INITIALIZING && poseHistory.size() >= 2) {
             // Use previous poses to triangulate points
             const Pose6DOF& prevPose = poseHistory[poseHistory.size() - 2];
             
@@ -342,7 +342,7 @@ void ARMotionTracker::updateMapPoints() {
             // In a full SLAM system, this would involve bundle adjustment
             // For now, we just update confidence based on reprojection error
             
-            if (trackingState == TrackingState::TRACKING) {
+            if (trackingState == MotionTrackingState::TRACKING) {
                 // Project 3D point to image
                 std::vector<cv::Point3f> objectPoints = {
                     cv::Point3f(feature.worldPoint.x, feature.worldPoint.y, feature.worldPoint.z)
@@ -419,7 +419,7 @@ void ARMotionTracker::cullBadFeatures() {
 }
 
 void ARMotionTracker::reset() {
-    trackingState = TrackingState::NOT_TRACKING;
+    trackingState = MotionTrackingState::NOT_TRACKING;
     trackedFeatures.clear();
     poseHistory.clear();
     currentPose = Pose6DOF();
